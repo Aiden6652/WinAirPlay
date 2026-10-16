@@ -5,6 +5,8 @@
     <TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <UseWPF>true</UseWPF>
+    <!-- Allows building the WPF project on non-Windows hosts (compile-only, for CI/verification). -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <AssemblyName>WinAirPlay</AssemblyName>
     <RootNamespace>WinAirPlay.Gui</RootNamespace>
     <LangVersion>latest</LangVersion>

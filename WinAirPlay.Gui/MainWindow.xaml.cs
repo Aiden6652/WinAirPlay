@@ -10,8 +10,8 @@ namespace WinAirPlay.Gui
 {
     public partial class MainWindow : Window
     {
-        private EngineLauncher _engine;
-        private ReceiverSettings _settings;
+        private EngineLauncher? _engine;
+        private ReceiverSettings _settings = null!;
         private readonly object _engineLock = new object();
         private State _state = State.Initializing;
 
@@ -35,7 +35,7 @@ namespace WinAirPlay.Gui
             StartReceiver();
         }
 
-        private void MainWindow_Closing(object sender, System.ComponentModel.CancelEventArgs e)
+        private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
         {
             lock (_engineLock)
             {

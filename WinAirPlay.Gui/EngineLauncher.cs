@@ -10,10 +10,10 @@ namespace WinAirPlay.Gui
     /// </summary>
     public class EngineLauncher : IDisposable
     {
-        private Process _proc;
+        private Process? _proc;
 
-        public event Action<string> LogLine;
-        public event Action<int> Exited;
+        public event Action<string>? LogLine;
+        public event Action<int>? Exited;
 
         public bool IsRunning => _proc != null && !_proc.HasExited;
 
