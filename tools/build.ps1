@@ -17,7 +17,10 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Push-Location $root
 try {
-    $sc = if ($FrameworkDependent) { "" } else { "--self-contained -r win-x64" }
+    # NOTE: must be an ARRAY so PowerShell passes each flag as a separate argument.
+    # A single string like "--self-contained -r win-x64" is handed to dotnet as ONE
+    # token and MSBuild rejects it (MSB1001: Unknown switch).
+    $scArgs = if ($FrameworkDependent) { @() } else { @('--self-contained', '-r', 'win-x64') }
     $out = Join-Path $root "dist" "WinAirPlay"
 
     if (Test-Path $out) { Remove-Item $out -Recurse -Force }
@@ -25,12 +28,12 @@ try {
 
     # 1) Publish the WPF GUI (the app you actually launch)
     Write-Host "[1/4] Publishing GUI..." -ForegroundColor Cyan
-    dotnet publish "WinAirPlay.Gui\WinAirPlay.Gui.csproj" -c Release $sc -o $out
+    dotnet publish "WinAirPlay.Gui\WinAirPlay.Gui.csproj" -c Release @scArgs -o $out
 
     # 2) Publish the AirPlay engine (the received-screen worker process)
     Write-Host "[2/4] Publishing AirPlay engine..." -ForegroundColor Cyan
     $engineOut = Join-Path $root "dist" "AirPlayEngine"
-    dotnet publish "AirPlay\AirPlay.csproj" -c Release $sc -o $engineOut
+    dotnet publish "AirPlay\AirPlay.csproj" -c Release @scArgs -o $engineOut
 
     # 3) Merge engine into the GUI's "Engine" subfolder (GUI launches AirPlay.exe from there)
     Write-Host "[3/4] Packaging engine into Engine folder..." -ForegroundColor Cyan
