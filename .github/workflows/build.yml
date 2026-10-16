@@ -1,0 +1,44 @@
+name: Build WinAirPlay
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+  release:
+    types: [ published ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build & package (self-contained)
+        shell: pwsh
+        run: |
+          ./tools/build.ps1
+
+      - name: Upload distributable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WinAirPlay
+          path: dist/WinAirPlay/**
+          if-no-files-found: error
+
+      - name: Zip for release
+        if: github.event_name == 'release'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist/WinAirPlay/*" -DestinationPath "WinAirPlay-${{ github.event.release.tag_name }}.zip" -Force
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "WinAirPlay-${{ github.event.release.tag_name }}.zip"
