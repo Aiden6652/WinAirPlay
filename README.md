@@ -41,8 +41,8 @@
 
 ### 方式一：下载预编译包（推荐）
 
-1. 到 [Releases](https://github.com/Aiden6652/WinAirPlay/releases) 下载 `WinAirPlay-Setup-x.x.x.exe` 安装，或下载 ZIP 解压。
-2. 运行 `WinAirPlay.exe`。
+1. 到 [Releases](https://github.com/Aiden6652/WinAirPlay/releases) 下载 `WinAirPlay-vX.X.X.zip` 并解压，**解压后只有一个 `WinAirPlay.exe`**（.NET 运行时、WPF 原生库、引擎、FFmpeg 已全部内嵌）。
+2. 双击 `WinAirPlay.exe`。
 3. 在 iPad 上：控制中心 → 屏幕镜像 → 选择你的电脑。
 
 ### 方式二：从源码构建（Windows）
@@ -63,20 +63,21 @@
 
 ## 首次使用：放行防火墙
 
-接收器会监听 `5000 / 7000` 等端口并广播 mDNS（UDP 5353）。**首次运行时 Windows 防火墙可能拦截**，请允许 `WinAirPlay.exe` 与 `AirPlay.exe`（在 `Engine\` 子目录）通过「专用 / 公用网络」。
-
-命令行一键放行（管理员 PowerShell）：
+接收器会监听 `5000 / 7000` 等端口并广播 mDNS（UDP 5353）。**首次运行时 Windows 防火墙可能拦截**。本程序的所有组件（含自动解压出的引擎）都打包在单个 `WinAirPlay.exe` 内，推荐直接按端口放行，省去逐个程序配置的麻烦（管理员 PowerShell）：
 
 ```powershell
 New-NetFirewallRule -DisplayName "WinAirPlay" -Direction Inbound -Program "$PWD\WinAirPlay.exe" -Action Allow
-New-NetFirewallRule -DisplayName "WinAirPlay-Engine" -Direction Inbound -Program "$PWD\Engine\AirPlay.exe" -Action Allow
+New-NetFirewallRule -DisplayName "WinAirPlay-mDNS" -Direction Inbound -Protocol UDP -LocalPort 5353 -Action Allow
+New-NetFirewallRule -DisplayName "WinAirPlay-Mirror" -Direction Inbound -Protocol TCP -LocalPort 5000,7000 -Action Allow
 ```
+
+> 若首次投屏失败、iPad 搜不到设备，多半是防火墙拦了引擎子进程（它在临时目录运行）。按上面端口规则放行后即可。
 
 ---
 
 ## 可选：用 libfdk-aac 提升音质
 
-默认 FFmpeg 回退解码已能出声。若想要更高音质，可编译 `libfdk-aac-2.dll` 放到 `Engine\` 目录：
+默认 FFmpeg 回退解码已能出声。若想要更高音质，可编译 `libfdk-aac-2.dll` 放到引擎解压目录（默认 `%TEMP%\WinAirPlay\engine\`），重启应用即可：
 
 1. 安装 [MSYS2](https://www.msys2.org/)，打开 **MSYS2 MinGW 64-bit** 终端：
    ```bash
@@ -86,7 +87,7 @@ New-NetFirewallRule -DisplayName "WinAirPlay-Engine" -Direction Inbound -Program
    cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON ..
    cmake --build .
    ```
-2. 把生成的 `libfdk-aac-2.dll` 复制到 `Engine\` 目录，重启应用即可。
+2. 把生成的 `libfdk-aac-2.dll` 复制到 `%TEMP%\WinAirPlay\engine\` 目录，重启应用即可。
 
 ---
 
