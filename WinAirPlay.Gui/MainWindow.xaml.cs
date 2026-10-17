@@ -46,6 +46,17 @@ namespace WinAirPlay.Gui
 
         private void StartReceiver()
         {
+            try
+            {
+                EngineBundle.EnsureExtracted();
+            }
+            catch (Exception ex)
+            {
+                SetStatus(State.Stopped, "引擎解压失败：" + ex.Message);
+                AppendLog("ERROR: " + ex);
+                return;
+            }
+
             string engineExe = System.IO.Path.Combine(Settings.EngineDir, "AirPlay.exe");
             if (!System.IO.File.Exists(engineExe))
             {

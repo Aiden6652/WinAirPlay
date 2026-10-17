@@ -13,4 +13,9 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- The AirPlay engine + FFmpeg are zipped and embedded into this single-file EXE at build time. -->
+    <EmbeddedResource Include="Resources\engine.zip" Condition="Exists('Resources\engine.zip')" />
+  </ItemGroup>
+
 </Project>

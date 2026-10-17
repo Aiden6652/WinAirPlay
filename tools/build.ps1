@@ -1,14 +1,16 @@
 <#
 .SYNOPSIS
-    Build WinAirPlay and produce a ready-to-run distributable folder.
-    By default publishes BOTH the GUI and the AirPlay engine as
-    self-contained win-x64 (no .NET runtime install required).
+    Build WinAirPlay as a SINGLE-FILE Windows EXE.
+
+    The AirPlay receiver engine and FFmpeg are bundled into a zip, embedded as a
+    resource inside WinAirPlay.exe, and extracted to a temp folder on first launch.
+    The delivered package is just one EXE (plus the unavoidable WPF native DLLs).
 
 .OUTPUT
-    <repo>\dist\WinAirPlay\   ->  final folder you can zip / install
+    <repo>\dist\WinAirPlay\   ->  WinAirPlay.exe (+ a few WPF native DLLs)
 #>
 param(
-    [switch]$FrameworkDependent   # use this to avoid bundling the .NET runtime (smaller, needs .NET 8 Desktop Runtime)
+    [switch]$FrameworkDependent   # skip bundling the .NET runtime (smaller, needs .NET 8 Desktop Runtime)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,35 +23,44 @@ try {
     # A single string like "--self-contained -r win-x64" is handed to dotnet as ONE
     # token and MSBuild rejects it (MSB1001: Unknown switch).
     $scArgs = if ($FrameworkDependent) { @() } else { @('--self-contained', '-r', 'win-x64') }
-    $out = Join-Path $root "dist" "WinAirPlay"
+    $out    = Join-Path $root "dist" "WinAirPlay"
+    $guiProj = Join-Path $root "WinAirPlay.Gui" "WinAirPlay.Gui.csproj"
+    $engProj = Join-Path $root "AirPlay" "AirPlay.csproj"
+    $resDir  = Join-Path $root "WinAirPlay.Gui" "Resources"
+    $engineZip = Join-Path $resDir "engine.zip"
 
     if (Test-Path $out) { Remove-Item $out -Recurse -Force }
     New-Item -ItemType Directory -Path $out | Out-Null
 
-    # 1) Publish the WPF GUI (the app you actually launch)
-    Write-Host "[1/4] Publishing GUI..." -ForegroundColor Cyan
-    dotnet publish "WinAirPlay.Gui\WinAirPlay.Gui.csproj" -c Release @scArgs -o $out
+    # 1) Publish the AirPlay engine (self-contained worker process)
+    Write-Host "[1/4] Publishing AirPlay engine..." -ForegroundColor Cyan
+    $engineOut = Join-Path $root "dist" "EngineRaw"
+    if (Test-Path $engineOut) { Remove-Item $engineOut -Recurse -Force }
+    dotnet publish $engProj -c Release @scArgs -o $engineOut
 
-    # 2) Publish the AirPlay engine (the received-screen worker process)
-    Write-Host "[2/4] Publishing AirPlay engine..." -ForegroundColor Cyan
-    $engineOut = Join-Path $root "dist" "AirPlayEngine"
-    dotnet publish "AirPlay\AirPlay.csproj" -c Release @scArgs -o $engineOut
+    # 2) Fetch FFmpeg into the engine folder (so FindFfplay() sees ffplay.exe next to AirPlay.exe)
+    Write-Host "[2/4] Fetching FFmpeg..." -ForegroundColor Cyan
+    & "$PSScriptRoot\Get-Dependencies.ps1" -Destination $engineOut
 
-    # 3) Merge engine into the GUI's "Engine" subfolder (GUI launches AirPlay.exe from there)
-    Write-Host "[3/4] Packaging engine into Engine folder..." -ForegroundColor Cyan
-    $engineDest = Join-Path $out "Engine"
-    if (Test-Path $engineDest) { Remove-Item $engineDest -Recurse -Force }
-    New-Item -ItemType Directory -Path $engineDest | Out-Null
-    Copy-Item -Path (Join-Path $engineOut "*") -Destination $engineDest -Recurse -Force
+    # 3) Zip engine + FFmpeg into the GUI's Resources folder (embedded by the single-file publish)
+    Write-Host "[3/4] Packing engine bundle (engine.zip)..." -ForegroundColor Cyan
+    if (-not (Test-Path $resDir)) { New-Item -ItemType Directory -Path $resDir | Out-Null }
+    if (Test-Path $engineZip) { Remove-Item $engineZip -Force }
+    Compress-Archive -Path (Join-Path $engineOut "*") -DestinationPath $engineZip -Force
 
-    # 4) Fetch FFmpeg (required for video + AAC-ELD audio fallback)
-    Write-Host "[4/4] Fetching FFmpeg dependencies..." -ForegroundColor Cyan
-    & "$PSScriptRoot\Get-Dependencies.ps1" -Destination $engineDest
+    # 4) Publish the WPF GUI as a single self-contained file (embeds .NET runtime + engine.zip)
+    Write-Host "[4/4] Publishing single-file GUI..." -ForegroundColor Cyan
+    $pubArgs = if ($FrameworkDependent) { @() } else { @('--self-contained', '-r', 'win-x64') }
+    $pubArgs += @('-p:PublishSingleFile=true', '-p:IncludeAllContentInSingleFile=true')
+    dotnet publish $guiProj -c Release @pubArgs -o $out
+
+    # Clean the intermediate engine folder (it lives inside engine.zip now)
+    if (Test-Path $engineOut) { Remove-Item $engineOut -Recurse -Force }
 
     Write-Host ""
-    Write-Host "[+] Build complete. Distributable folder:" -ForegroundColor Green
-    Write-Host "    $out" -ForegroundColor Green
-    Write-Host "    Run WinAirPlay.exe -> it auto-starts receiving; pick your PC from the iPad's Screen Mirroring." -ForegroundColor DarkGray
+    Write-Host "[+] Build complete. Single-file app:" -ForegroundColor Green
+    Write-Host "    $out\WinAirPlay.exe" -ForegroundColor Green
+    Write-Host "    On first launch it extracts the engine + FFmpeg to a temp folder automatically." -ForegroundColor DarkGray
 }
 finally {
     Pop-Location

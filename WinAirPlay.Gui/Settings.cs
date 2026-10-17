@@ -18,8 +18,8 @@ namespace WinAirPlay.Gui
 
     public static class Settings
     {
-        /// <summary>The engine is deployed into an "Engine" subfolder next to this app.</summary>
-        public static string EngineDir => Path.Combine(AppContext.BaseDirectory, "Engine");
+        /// <summary>The engine (AirPlay.exe + FFmpeg) is extracted from the embedded bundle to a temp folder at launch.</summary>
+        public static string EngineDir => EngineBundle.EngineDir;
 
         public static string ConfigPath => Path.Combine(EngineDir, "appsettings_win.json");
 
