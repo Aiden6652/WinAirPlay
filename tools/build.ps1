@@ -51,7 +51,7 @@ try {
     # 4) Publish the WPF GUI as a single self-contained file (embeds .NET runtime + engine.zip)
     Write-Host "[4/4] Publishing single-file GUI..." -ForegroundColor Cyan
     $pubArgs = if ($FrameworkDependent) { @() } else { @('--self-contained', '-r', 'win-x64') }
-    $pubArgs += @('-p:PublishSingleFile=true', '-p:IncludeAllContentInSingleFile=true')
+    $pubArgs += @('-p:PublishSingleFile=true', '-p:IncludeAllContentInSingleFile=true', '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:DebugType=none')
     dotnet publish $guiProj -c Release @pubArgs -o $out
 
     # Clean the intermediate engine folder (it lives inside engine.zip now)
