@@ -132,14 +132,17 @@ namespace WinAirPlay.Gui
             Task.Run(() =>
             {
                 IntPtr hwnd = FfplayHost.FindFfplayWindow(pid, 8000);
-                if (hwnd != IntPtr.Zero)
+                Dispatcher.Invoke(() =>
                 {
-                    Dispatcher.Invoke(() =>
+                    if (hwnd != IntPtr.Zero)
                     {
-                        try { VideoPresenter.Content = new FfplayHost(pid); }
-                        catch { /* ffplay keeps its own window as a fallback */ }
-                    });
-                }
+                        try { VideoPresenter.Content = new FfplayHost(pid); return; }
+                        catch { /* fall through to standalone-window notice below */ }
+                    }
+                    // Embedding failed (or ffplay not yet visible): it keeps its own window,
+                    // so the user still sees video — just tell them where it is.
+                    SetStatus(State.Mirroring, "已连接 · 画面以独立窗口显示（未嵌入主窗口）");
+                });
             });
         }
 

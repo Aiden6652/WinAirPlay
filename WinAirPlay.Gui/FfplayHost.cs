@@ -2,13 +2,17 @@ using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Media;
 
 namespace WinAirPlay.Gui
 {
     /// <summary>
     /// Hosts the ffplay window (launched by the engine) inside the WPF visual tree.
-    /// ffplay is a separate process; we reparent its top-level window into this HwndHost.
+    /// ffplay is a separate process; we reparent its top-level window into this HwndHost
+    /// and, crucially, resize it to fill this host on every arrange pass. Without that
+    /// resize the embedded window collapses to 0x0 and the mirror shows nothing.
     /// All P/Invoke is guarded so a failure simply leaves ffplay as a standalone window.
     /// </summary>
     public class FfplayHost : HwndHost
@@ -20,7 +24,7 @@ namespace WinAirPlay.Gui
 
         protected override HandleRef BuildWindowCore(HandleRef hwndParent)
         {
-            _ffHwnd = FindFfplayWindow(_pid, 3000);
+            _ffHwnd = FindFfplayWindow(_pid, 4000);
             if (_ffHwnd == IntPtr.Zero)
                 return new HandleRef(null, IntPtr.Zero);
 
@@ -33,6 +37,8 @@ namespace WinAirPlay.Gui
             }
             catch { }
 
+            // Reparent into the host. Sizing happens in ArrangeOverride (ActualWidth
+            // is still 0 here, so we must not MoveWindow to a zero rect yet).
             SetParent(_ffHwnd, hwndParent.Handle);
             return new HandleRef(this, _ffHwnd);
         }
@@ -40,6 +46,34 @@ namespace WinAirPlay.Gui
         protected override void DestroyWindowCore(HandleRef hwnd)
         {
             try { SetParent(hwnd.Handle, IntPtr.Zero); } catch { }
+        }
+
+        protected override Size MeasureOverride(Size constraint)
+        {
+            // Claim all the space the parent grid cell gives us.
+            return constraint;
+        }
+
+        protected override Size ArrangeOverride(Size arrangeBounds)
+        {
+            if (arrangeBounds.Width >= 1 && arrangeBounds.Height >= 1 && _ffHwnd != IntPtr.Zero)
+                ResizeToHost(arrangeBounds);
+            return arrangeBounds;
+        }
+
+        private void ResizeToHost(Size bounds)
+        {
+            if (_ffHwnd == IntPtr.Zero) return;
+            if (bounds.Width < 1 || bounds.Height < 1) return;
+            try
+            {
+                // arrangeBounds are device-independent pixels; MoveWindow wants physical pixels.
+                var dpi = VisualTreeHelper.GetDpi(this);
+                int pw = (int)(bounds.Width * dpi.X);
+                int ph = (int)(bounds.Height * dpi.Y);
+                MoveWindow(_ffHwnd, 0, 0, pw, ph, true);
+            }
+            catch { }
         }
 
         /// <summary>Wait (up to timeoutMs) for ffplay's main window to appear for the given PID.</summary>
@@ -77,5 +111,8 @@ namespace WinAirPlay.Gui
 
         [DllImport("user32.dll")]
         private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+
+        [DllImport("user32.dll")]
+        private static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
     }
 }
