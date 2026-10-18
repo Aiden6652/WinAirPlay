@@ -1,10 +1,8 @@
 using System;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
 using System.Windows.Interop;
-using System.Windows.Media;
 
 namespace WinAirPlay.Gui
 {
@@ -83,32 +81,58 @@ namespace WinAirPlay.Gui
             catch { }
         }
 
-        /// <summary>Wait (up to timeoutMs) for ffplay's main window to appear for the given PID.</summary>
+        /// <summary>
+        /// Wait (up to timeoutMs) for ffplay's top-level window to appear for the given PID.
+        /// Uses EnumWindows instead of Process.MainWindowHandle because the latter caches an
+        /// empty handle while ffplay is still initialising.
+        /// </summary>
         public static IntPtr FindFfplayWindow(int pid, int timeoutMs)
         {
             int deadline = Environment.TickCount + timeoutMs;
             while (Environment.TickCount < deadline)
             {
-                foreach (var p in Process.GetProcessesByName("ffplay"))
+                IntPtr found = IntPtr.Zero;
+                EnumWindows((hWnd, lParam) =>
                 {
-                    try
-                    {
-                        if (p.Id == pid && p.MainWindowHandle != IntPtr.Zero)
-                            return p.MainWindowHandle;
-                    }
-                    catch { }
-                }
-                Thread.Sleep(100);
+                    GetWindowThreadProcessId(hWnd, out uint winPid);
+                    if (winPid != (uint)pid) return true;
+                    if (!IsWindowVisible(hWnd)) return true;
+                    if (GetWindow(hWnd, GW_OWNER) != IntPtr.Zero) return true; // skip tool windows
+                    if (GetWindowTextLength(hWnd) == 0 && GetWindowLong(hWnd, GWL_STYLE) == 0) return true;
+                    found = hWnd;
+                    return false; // stop enumerating
+                }, IntPtr.Zero);
+
+                if (found != IntPtr.Zero) return found;
+                Thread.Sleep(80);
             }
             return IntPtr.Zero;
         }
 
         private const int GWL_STYLE = -16;
+        private const uint GW_OWNER = 4;
         private const int WS_CAPTION = 0x00C00000;
         private const int WS_THICKFRAME = 0x00040000;
         private const int WS_SYSMENU = 0x00080000;
         private const int WS_MINIMIZEBOX = 0x00020000;
         private const int WS_MAXIMIZEBOX = 0x00010000;
+
+        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetWindowTextLength(IntPtr hWnd);
 
         [DllImport("user32.dll")]
         private static extern IntPtr SetParent(IntPtr hWndChild, IntPtr hWndNewParent);

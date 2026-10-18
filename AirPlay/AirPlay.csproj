@@ -1,7 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <!-- WinExe: the engine is a hidden child process; a Console subsystem would pop up
+         a black console window behind/over the GUI. stdout is redirected by the GUI. -->
+    <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
     <NoWarn>$(NoWarn);SYSLIB0011;SYSLIB0050</NoWarn>
     <ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles>

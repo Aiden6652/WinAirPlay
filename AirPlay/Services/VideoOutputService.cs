@@ -133,15 +133,17 @@ namespace AirPlay.Services
 
         private void LaunchFfplay(string pipePath)
         {
-            // Low-latency ffplay flags:
-            //   -probesize 32768: small probe size (pre-buffered SPS/PPS+IDR makes this sufficient)
-            //   -analyzeduration 0: don't wait to analyze stream duration
+            // NOTE: we intentionally do NOT pass -probesize/-analyzeduration. ffplay would then
+            // create its window only after the first bytes arrive, which makes window-handle
+            // discovery race-prone. With defaults the window appears immediately; the small
+            // extra latency is worth having a stable, embeddable window.
+            // Low-latency flags kept:
             //   -fflags nobuffer+discardcorrupt: no input buffering, discard corrupt frames
             //   -flags low_delay: enable low-delay decoding
             //   -framedrop: drop frames if display can't keep up
             //   -avioflags direct: bypass I/O buffering on pipe reads
             //   -vf setpts=0: zero out PTS so frames display immediately without pacing delay
-            var ffplayArgs = $"-f h264 -probesize 32768 -analyzeduration 0 -fflags nobuffer+discardcorrupt -flags low_delay -framedrop -avioflags direct -vf setpts=0 \"{pipePath}\"";
+            var ffplayArgs = $"-f h264 -fflags nobuffer+discardcorrupt -flags low_delay -framedrop -avioflags direct -vf setpts=0 \"{pipePath}\"";
 
             try
             {
@@ -157,6 +159,11 @@ namespace AirPlay.Services
                 {
                     FileName = ffplayPath,
                     Arguments = ffplayArgs,
+                    // CRITICAL: ffplay.exe needs its sibling DLLs (ffmpeg's av*.dll / SDL2.dll).
+                    // Without an explicit WorkingDirectory it inherits the parent's CWD, which is
+                    // NOT the engine folder -> the process dies instantly with 0xc0000135 and no
+                    // window ever appears.
+                    WorkingDirectory = Path.GetDirectoryName(ffplayPath),
                     UseShellExecute = false,
                     CreateNoWindow = false
                 };
@@ -165,6 +172,16 @@ namespace AirPlay.Services
                 if (_ffplayProcess != null)
                 {
                     Console.WriteLine($"ffplay launched (PID: {_ffplayProcess.Id})");
+                    // Surface an immediate crash instead of silently waiting for a window that never comes.
+                    Task.Run(() =>
+                    {
+                        try
+                        {
+                            if (_ffplayProcess.WaitForExit(2500))
+                                Console.WriteLine($"ffplay exited early with code {_ffplayProcess.ExitCode} (window never appeared)");
+                        }
+                        catch { }
+                    });
                 }
             }
             catch (Exception ex)

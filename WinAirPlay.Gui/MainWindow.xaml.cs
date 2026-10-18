@@ -31,6 +31,12 @@ namespace WinAirPlay.Gui
             PortBox.Text = _settings.AirPlayPort.ToString();
             MacBox.Text = _settings.DeviceMacAddress;
 
+            // Environment diagnostics: the first thing to look at when video never appears.
+            var ffplay = System.IO.Path.Combine(Settings.EngineDir, "ffplay.exe");
+            AppendLog("引擎目录：" + Settings.EngineDir);
+            AppendLog("ffplay.exe：" + (System.IO.File.Exists(ffplay) ? "OK" : "缺失！(" + ffplay + ")"));
+            AppendLog("ffmpeg.exe：" + (System.IO.File.Exists(System.IO.Path.Combine(Settings.EngineDir, "ffmpeg.exe")) ? "OK" : "缺失！"));
+
             // Open the app and it's immediately ready to receive — no Start button needed.
             StartReceiver();
         }
@@ -131,17 +137,17 @@ namespace WinAirPlay.Gui
             // Poll off the UI thread, then embed on the UI thread so BuildWindowCore is instant.
             Task.Run(() =>
             {
-                IntPtr hwnd = FfplayHost.FindFfplayWindow(pid, 8000);
+                IntPtr hwnd = FfplayHost.FindFfplayWindow(pid, 12000);
                 Dispatcher.Invoke(() =>
                 {
                     if (hwnd != IntPtr.Zero)
                     {
                         try { VideoPresenter.Content = new FfplayHost(pid); return; }
-                        catch { /* fall through to standalone-window notice below */ }
+                        catch (Exception ex) { AppendLog("嵌入视频窗口失败：" + ex.Message); }
                     }
-                    // Embedding failed (or ffplay not yet visible): it keeps its own window,
-                    // so the user still sees video — just tell them where it is.
-                    SetStatus(State.Mirroring, "已连接 · 画面以独立窗口显示（未嵌入主窗口）");
+                    // ffplay never produced a window -> it most likely crashed on startup.
+                    SetStatus(State.Mirroring, "已连接，但视频窗口未出现（ffplay 启动失败）");
+                    AppendLog("ERROR: ffplay (PID " + pid + ") 没有产生窗口，请查看上方日志与「独立窗口」提示。");
                 });
             });
         }
