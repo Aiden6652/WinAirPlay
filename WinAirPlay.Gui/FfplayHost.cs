@@ -68,9 +68,16 @@ namespace WinAirPlay.Gui
             try
             {
                 // arrangeBounds are device-independent pixels; MoveWindow wants physical pixels.
-                var dpi = VisualTreeHelper.GetDpi(this);
-                int pw = (int)(bounds.Width * dpi.X);
-                int ph = (int)(bounds.Height * dpi.Y);
+                double scaleX = 1.0, scaleY = 1.0;
+                var source = PresentationSource.FromVisual(this);
+                if (source?.CompositionTarget != null)
+                {
+                    var m = source.CompositionTarget.TransformToDevice;
+                    scaleX = m.M11;
+                    scaleY = m.M22;
+                }
+                int pw = (int)(bounds.Width * scaleX);
+                int ph = (int)(bounds.Height * scaleY);
                 MoveWindow(_ffHwnd, 0, 0, pw, ph, true);
             }
             catch { }
