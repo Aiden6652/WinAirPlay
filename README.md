@@ -10,7 +10,7 @@
 
 - **屏幕镜像**：将 iPad / iPhone / Mac 的屏幕投到 Windows，支持 H.264 视频 + AAC-ELD 音频
 - **打开即用**：启动后自动通过 mDNS（Bonjour）广播，iPad 立刻能在「屏幕镜像」列表中看到你的电脑
-- **画面自动嵌入主窗口**：投屏窗口直接嵌在应用里，无需额外弹窗
+- **画面自动嵌入主窗口**：接收引擎把 H.264 写入命名管道，GUI 用自带的 `ffmpeg` 在**进程内**解码并直接画到 WPF 画布上——不依赖任何外部窗口，永不出现"黑屏/找不到窗口/残留控制台"问题
 - **音频**：镜像音频默认用内置的 FFmpeg 子进程解码（**无需额外依赖**）；也可选配 `libfdk-aac` 获得更好音质
 - **设备名可改**：在「设置」里改设备名（iPad 上显示的名字），应用自动重启生效
 - **日志面板**：实时查看接收器状态，便于排查
@@ -25,7 +25,7 @@
 - [SteeBono/airplayreceiver](https://github.com/SteeBono/airplayreceiver) — 原始 C# AirPlay 接收实现（许可证见 `LICENSE`，© 2020 Stefano Bono）
 - [FDH2/UxPlay](https://github.com/FDH2/UxPlay) — AirPlay 协议参考
 
-视频渲染复用 `ffplay`（FFmpeg），音频 AAC-ELD 解码在原生 FDK-AAC 不可用时自动回退到 FFmpeg 子进程解码。
+视频渲染：接收引擎（AirPlay.exe 套件，含 FFmpeg）把 H.264 数据写入命名管道 `\\.\pipe\AirPlayVideo`，GUI 进程内的 `VideoRenderer` 启动同目录的 `ffmpeg.exe`（参数见 `WinAirPlay.Gui/VideoRenderer.cs`），解码为 `bgr24` 原始帧后直接 `WritePixels` 到 WPF `WriteableBitmap`。音频 AAC-ELD 解码在原生 FDK-AAC 不可用时自动回退到 FFmpeg 子进程解码。
 
 ---
 

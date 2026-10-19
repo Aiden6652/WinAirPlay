@@ -98,7 +98,7 @@ namespace AirPlay
 
             // Initialize video output service (will be started/stopped per mirroring session)
             _videoOutput = new VideoOutputService();
-            Console.WriteLine("Video output service ready (will auto-launch ffplay when mirroring starts)");
+            Console.WriteLine("Video output service ready (GUI decoding via ffmpeg when mirroring starts)");
 
             await _airPlayReceiver.StartListeners(cancellationToken);
             await _airPlayReceiver.StartMdnsAsync().ConfigureAwait(false);

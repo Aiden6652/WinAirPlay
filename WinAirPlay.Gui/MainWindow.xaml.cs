@@ -1,19 +1,23 @@
 using System;
-using System.Text.RegularExpressions;
+using System.IO;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
-using System.Windows.Threading;
 
 namespace WinAirPlay.Gui
 {
     public partial class MainWindow : Window
     {
         private EngineLauncher? _engine;
+        private VideoRenderer? _renderer;
         private ReceiverSettings _settings = null!;
         private readonly object _engineLock = new object();
         private State _state = State.Initializing;
+
+        // Must match AirPlay/Services/VideoOutputService.cs
+        private const string PipeReadyMarker = "VIDEOPIPE_READY";
+        private const string PipeClosedMarker = "VIDEOPIPE_CLOSED";
 
         private enum State { Initializing, Waiting, Mirroring, Stopped }
 
@@ -32,10 +36,8 @@ namespace WinAirPlay.Gui
             MacBox.Text = _settings.DeviceMacAddress;
 
             // Environment diagnostics: the first thing to look at when video never appears.
-            var ffplay = System.IO.Path.Combine(Settings.EngineDir, "ffplay.exe");
             AppendLog("引擎目录：" + Settings.EngineDir);
-            AppendLog("ffplay.exe：" + (System.IO.File.Exists(ffplay) ? "OK" : "缺失！(" + ffplay + ")"));
-            AppendLog("ffmpeg.exe：" + (System.IO.File.Exists(System.IO.Path.Combine(Settings.EngineDir, "ffmpeg.exe")) ? "OK" : "缺失！"));
+            AppendLog("ffmpeg.exe：" + (File.Exists(Path.Combine(Settings.EngineDir, "ffmpeg.exe")) ? "OK" : "缺失！"));
 
             // Open the app and it's immediately ready to receive — no Start button needed.
             StartReceiver();
@@ -43,6 +45,7 @@ namespace WinAirPlay.Gui
 
         private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
         {
+            StopVideo();
             lock (_engineLock)
             {
                 _engine?.Dispose();
@@ -63,8 +66,8 @@ namespace WinAirPlay.Gui
                 return;
             }
 
-            string engineExe = System.IO.Path.Combine(Settings.EngineDir, "AirPlay.exe");
-            if (!System.IO.File.Exists(engineExe))
+            string engineExe = Path.Combine(Settings.EngineDir, "AirPlay.exe");
+            if (!File.Exists(engineExe))
             {
                 SetStatus(State.Stopped, "未找到接收引擎 AirPlay.exe（请先构建/部署，见 README）。");
                 AppendLog("ERROR: AirPlay.exe not found at " + engineExe);
@@ -81,7 +84,7 @@ namespace WinAirPlay.Gui
                 _engine.Exited += OnEngineExited;
             }
 
-            ClearVideo();
+            StopVideo();
             SetStatus(State.Initializing, "正在启动接收器…");
             try
             {
@@ -101,7 +104,8 @@ namespace WinAirPlay.Gui
             {
                 if (_state != State.Stopped)
                     SetStatus(State.Stopped, "接收器已退出（代码 " + code + "）。");
-                ClearVideo();
+                StopVideo();
+                WaitingOverlay.Visibility = Visibility.Visible;
             });
         }
 
@@ -114,48 +118,88 @@ namespace WinAirPlay.Gui
                 if (line.Contains("Video output service ready") || line.Contains("IP address"))
                     SetStatus(State.Waiting, "正在广播，等待 iPad 连接…");
 
-                var m = Regex.Match(line, @"ffplay launched \(PID: (\d+)\)");
-                if (m.Success)
+                // The engine created a fresh video pipe: decode it ourselves, in-process.
+                if (line.Contains(PipeReadyMarker))
                 {
-                    int pid = int.Parse(m.Groups[1].Value);
-                    SetStatus(State.Mirroring, "已连接，正在投屏…");
-                    ShowVideo(pid);
+                    StartVideo();
+                    return;
                 }
 
-                if (line.Contains("Mirroring stopped"))
+                if (line.Contains(PipeClosedMarker) || line.Contains("Mirroring stopped"))
                 {
-                    SetStatus(State.Waiting, "正在广播，等待 iPad 连接…");
-                    ClearVideo();
+                    StopVideo();
+                    if (_state != State.Stopped) SetStatus(State.Waiting, "正在广播，等待 iPad 连接…");
+                    WaitingOverlay.Visibility = Visibility.Visible;
                 }
             });
         }
 
-        private void ShowVideo(int pid)
+        /// <summary>Starts (or restarts) the in-process renderer for the current pipe.</summary>
+        private void StartVideo()
         {
-            WaitingOverlay.Visibility = Visibility.Collapsed;
+            StopVideo();
 
-            // Poll off the UI thread, then embed on the UI thread so BuildWindowCore is instant.
-            Task.Run(() =>
+            string ffmpeg = Path.Combine(Settings.EngineDir, "ffmpeg.exe");
+            if (!File.Exists(ffmpeg))
             {
-                IntPtr hwnd = FfplayHost.FindFfplayWindow(pid, 12000);
-                Dispatcher.Invoke(() =>
+                SetStatus(State.Mirroring, "缺少 ffmpeg.exe，无法显示画面");
+                AppendLog("ERROR: 未找到 " + ffmpeg);
+                return;
+            }
+
+            try
+            {
+                var renderer = new VideoRenderer(ffmpeg, @"\\.\pipe\AirPlayVideo");
+                renderer.Log += msg =>
                 {
-                    if (hwnd != IntPtr.Zero)
-                    {
-                        try { VideoPresenter.Content = new FfplayHost(pid); return; }
-                        catch (Exception ex) { AppendLog("嵌入视频窗口失败：" + ex.Message); }
-                    }
-                    // ffplay never produced a window -> it most likely crashed on startup.
-                    SetStatus(State.Mirroring, "已连接，但视频窗口未出现（ffplay 启动失败）");
-                    AppendLog("ERROR: ffplay (PID " + pid + ") 没有产生窗口，请查看上方日志与「独立窗口」提示。");
-                });
+                    if (Dispatcher.HasShutdownStarted) return;
+                    Dispatcher.BeginInvoke(new Action(() => AppendLog("[ffmpeg] " + msg)));
+                };
+                renderer.Exited += () =>
+                {
+                    if (Dispatcher.HasShutdownStarted) return;
+                    Dispatcher.BeginInvoke(new Action(() => AppendLog("[ffmpeg] 解码进程已退出")));
+                };
+
+                _renderer = renderer;
+                VideoImage.Source = renderer.Bitmap;
+                renderer.Start();
+
+                WaitingOverlay.Visibility = Visibility.Collapsed;
+                VideoImage.Visibility = Visibility.Visible;
+                SetStatus(State.Mirroring, "已连接，正在投屏…");
+
+                WatchFirstFrame(renderer);
+            }
+            catch (Exception ex)
+            {
+                SetStatus(State.Mirroring, "视频渲染启动失败：" + ex.Message);
+                AppendLog("ERROR: " + ex);
+            }
+        }
+
+        /// <summary>Warns if ffmpeg stays silent, instead of leaving the user staring at black.</summary>
+        private void WatchFirstFrame(VideoRenderer renderer)
+        {
+            Task.Delay(6000).ContinueWith(_ =>
+            {
+                if (Dispatcher.HasShutdownStarted) return;
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (!ReferenceEquals(_renderer, renderer)) return;
+                    if (renderer.FramesRendered > 0) return;
+                    AppendLog("WARN: 6 秒内没有解出任何画面（ffmpeg 未收到可解码帧）。");
+                    SetStatus(State.Mirroring, "已连接，但未收到可解码的视频帧（请看日志 [ffmpeg] 行）");
+                }));
             });
         }
 
-        private void ClearVideo()
+        private void StopVideo()
         {
-            WaitingOverlay.Visibility = Visibility.Visible;
-            VideoPresenter.Content = null;
+            var r = _renderer;
+            _renderer = null;
+            VideoImage.Source = null;
+            try { r?.Dispose(); } catch { }
         }
 
         private void SetStatus(State s, string text)

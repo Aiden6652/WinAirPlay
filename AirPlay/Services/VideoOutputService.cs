@@ -1,11 +1,9 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using AirPlay.Models;
@@ -13,31 +11,39 @@ using AirPlay.Models;
 namespace AirPlay.Services
 {
     /// <summary>
-    /// Video output service that writes H.264 Annex B data to a named pipe.
-    /// Automatically launches ffplay when mirroring starts and kills it when mirroring stops.
-    /// Supports repeated start/stop cycles without requiring a program restart.
+    /// Video output service: writes H.264 Annex B data to a named pipe ("AirPlayVideo").
+    ///
+    /// Rendering is NOT done here any more. The GUI (WinAirPlay.exe) connects to this pipe
+    /// with its own bundled ffmpeg.exe, decodes to raw frames and paints them with WPF.
+    /// That removes every failure mode of embedding an ffplay/SDL window into a WPF window
+    /// (window discovery races, 0x0 clipping, black video after re-parenting, orphaned
+    /// ffplay processes and stray console windows).
     /// </summary>
     public class VideoOutputService : IDisposable
     {
         private const string PIPE_NAME = "AirPlayVideo";
         private const string UNIX_PIPE_PATH = "/tmp/airplay_video";
 
+        /// <summary>Stable machine-readable markers consumed by the GUI. Do not change without updating it.</summary>
+        public const string ReadyMarker = "VIDEOPIPE_READY";
+        public const string ClosedMarker = "VIDEOPIPE_CLOSED";
+
         private NamedPipeServerStream _pipeServer;
         private FileStream _unixPipeStream;
         private readonly object _lock = new object();
         private bool _disposed = false;
         private bool _connected = false;
+        private bool _sessionActive = false;
         private long _frameCount = 0;
         private CancellationTokenSource _cts;
         private Task _acceptTask;
-        private Process _ffplayProcess;
         private List<byte[]> _pendingFrames = new List<byte[]>();
         private bool _hasReceivedKeyFrame = false;
 
         public event EventHandler<string> OnStatusChanged;
 
         /// <summary>
-        /// Start a new mirroring session: create the pipe, launch ffplay, and wait for connection.
+        /// Start a new mirroring session: create the pipe and wait for the GUI renderer to connect.
         /// Can be called multiple times across mirroring sessions.
         /// </summary>
         public void StartMirroring()
@@ -46,8 +52,8 @@ namespace AirPlay.Services
             {
                 if (_disposed) return;
 
-                // Clean up any previous session
                 CleanupSession();
+                _sessionActive = true;
 
                 _cts = new CancellationTokenSource();
                 _frameCount = 0;
@@ -64,7 +70,7 @@ namespace AirPlay.Services
         }
 
         /// <summary>
-        /// Stop the current mirroring session: kill ffplay and clean up the pipe.
+        /// Stop the current mirroring session: tear down the pipe so the renderer sees EOF.
         /// </summary>
         public void StopMirroring()
         {
@@ -87,11 +93,9 @@ namespace AirPlay.Services
                     PipeOptions.Asynchronous);
 
                 Console.WriteLine($"Video pipe created: \\\\.\\pipe\\{PIPE_NAME}");
+                // Tell the GUI: a session is live, start your decoder now.
+                Console.WriteLine(ReadyMarker);
 
-                // Launch ffplay to connect to the pipe
-                LaunchFfplay($"\\\\.\\pipe\\{PIPE_NAME}");
-
-                // Wait for ffplay to connect in background
                 _acceptTask = Task.Run(() => WaitForPipeConnection(_cts.Token));
             }
             catch (Exception ex)
@@ -109,7 +113,7 @@ namespace AirPlay.Services
                     File.Delete(UNIX_PIPE_PATH);
                 }
 
-                var mkfifo = Process.Start(new ProcessStartInfo
+                var mkfifo = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = "mkfifo",
                     Arguments = UNIX_PIPE_PATH,
@@ -119,9 +123,7 @@ namespace AirPlay.Services
                 mkfifo?.WaitForExit();
 
                 Console.WriteLine($"Video FIFO created: {UNIX_PIPE_PATH}");
-
-                // Launch ffplay to read from the FIFO
-                LaunchFfplay(UNIX_PIPE_PATH);
+                Console.WriteLine(ReadyMarker);
 
                 // Open the FIFO for writing (blocks until reader connects)
                 _acceptTask = Task.Run(() => WaitForUnixPipeConnection(_cts.Token));
@@ -129,140 +131,6 @@ namespace AirPlay.Services
             catch (Exception ex)
             {
                 Console.WriteLine($"Failed to start video session: {ex.Message}");
-            }
-        }
-
-        private void LaunchFfplay(string pipePath)
-        {
-            // NOTE: we intentionally do NOT pass -probesize/-analyzeduration. ffplay would then
-            // create its window only after the first bytes arrive, which makes window-handle
-            // discovery race-prone. With defaults the window appears immediately; the small
-            // extra latency is worth having a stable, embeddable window.
-            // Low-latency flags kept:
-            //   -fflags nobuffer+discardcorrupt: no input buffering, discard corrupt frames
-            //   -flags low_delay: enable low-delay decoding
-            //   -framedrop: drop frames if display can't keep up
-            //   -avioflags direct: bypass I/O buffering on pipe reads
-            //   -vf setpts=0: zero out PTS so frames display immediately without pacing delay
-            var ffplayArgs = $"-f h264 -window_title \"WinAirPlay Mirror\" -fflags nobuffer+discardcorrupt -flags low_delay -framedrop -avioflags direct -vf setpts=0 \"{pipePath}\"";
-
-            try
-            {
-                var ffplayPath = FindFfplay();
-                if (ffplayPath == null)
-                {
-                    Console.WriteLine("ffplay not found. Please ensure ffplay is in the application directory or PATH.");
-                    Console.WriteLine($"  You can manually connect with: ffplay {ffplayArgs}");
-                    return;
-                }
-
-                var psi = new ProcessStartInfo
-                {
-                    FileName = ffplayPath,
-                    Arguments = ffplayArgs,
-                    // CRITICAL: ffplay.exe needs its sibling DLLs (ffmpeg's av*.dll / SDL2.dll).
-                    // Without an explicit WorkingDirectory it inherits the parent's CWD, which is
-                    // NOT the engine folder -> the process dies instantly with 0xc0000135 and no
-                    // window ever appears.
-                    WorkingDirectory = Path.GetDirectoryName(ffplayPath),
-                    UseShellExecute = false,
-                    // No console window (it would sit on top of the mirror). ffplay's log output
-                    // is forwarded to our stdout instead, so it still shows in the GUI log panel.
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    StandardOutputEncoding = Encoding.UTF8,
-                    StandardErrorEncoding = Encoding.UTF8
-                };
-
-                _ffplayProcess = new Process { StartInfo = psi, EnableRaisingEvents = true };
-                _ffplayProcess.OutputDataReceived += (s, e) => { if (e.Data != null) Console.WriteLine("[ffplay] " + e.Data); };
-                _ffplayProcess.ErrorDataReceived += (s, e) => { if (e.Data != null) Console.WriteLine("[ffplay] " + e.Data); };
-                _ffplayProcess.Start();
-                _ffplayProcess.BeginOutputReadLine();
-                _ffplayProcess.BeginErrorReadLine();
-
-                Console.WriteLine($"ffplay launched (PID: {_ffplayProcess.Id})");
-                // Surface an immediate crash instead of silently waiting for a window that never comes.
-                Task.Run(() =>
-                {
-                    try
-                    {
-                        if (_ffplayProcess.WaitForExit(2500))
-                            Console.WriteLine($"ffplay exited early with code {_ffplayProcess.ExitCode} (window never appeared)");
-                    }
-                    catch { }
-                });
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Failed to launch ffplay: {ex.Message}");
-                Console.WriteLine($"  You can manually connect with: ffplay {ffplayArgs}");
-            }
-        }
-
-        private string FindFfplay()
-        {
-            // Check application directory first
-            var appDir = AppDomain.CurrentDomain.BaseDirectory;
-            var ffplayName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "ffplay.exe" : "ffplay";
-            var localPath = Path.Combine(appDir, ffplayName);
-            if (File.Exists(localPath))
-            {
-                return localPath;
-            }
-
-            // Fall back to PATH
-            try
-            {
-                var whichCmd = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "where" : "which";
-                var psi = new ProcessStartInfo
-                {
-                    FileName = whichCmd,
-                    Arguments = "ffplay",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    CreateNoWindow = true
-                };
-                var proc = Process.Start(psi);
-                var output = proc?.StandardOutput.ReadToEnd()?.Trim();
-                proc?.WaitForExit();
-                var firstLine = output?.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim();
-                if (proc?.ExitCode == 0 && !string.IsNullOrWhiteSpace(firstLine))
-                {
-                    return firstLine;
-                }
-            }
-            catch { }
-
-            return null;
-        }
-
-        private void StopFfplay()
-        {
-            if (_ffplayProcess != null)
-            {
-                try
-                {
-                    if (!_ffplayProcess.HasExited)
-                    {
-                        Console.WriteLine($"Stopping ffplay (PID: {_ffplayProcess.Id})...");
-                        _ffplayProcess.Kill();
-                        if (!_ffplayProcess.WaitForExit(3000))
-                        {
-                            Console.WriteLine("Warning: ffplay did not exit within timeout");
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Error stopping ffplay: {ex.Message}");
-                }
-                finally
-                {
-                    _ffplayProcess.Dispose();
-                    _ffplayProcess = null;
-                }
             }
         }
 
@@ -282,11 +150,15 @@ namespace AirPlay.Services
             try { _unixPipeStream?.Dispose(); } catch { }
             _unixPipeStream = null;
 
-            StopFfplay();
-
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && File.Exists(UNIX_PIPE_PATH))
             {
                 try { File.Delete(UNIX_PIPE_PATH); } catch { }
+            }
+
+            if (_sessionActive)
+            {
+                _sessionActive = false;
+                Console.WriteLine(ClosedMarker);
             }
         }
 
@@ -296,7 +168,7 @@ namespace AirPlay.Services
             {
                 try
                 {
-                    Console.WriteLine("Waiting for video player to connect...");
+                    Console.WriteLine("Waiting for video renderer to connect...");
                     await _pipeServer.WaitForConnectionAsync(token);
 
                     lock (_lock)
@@ -304,7 +176,7 @@ namespace AirPlay.Services
                         _connected = true;
                         FlushPendingFrames();
                     }
-                    Console.WriteLine("Video player connected!");
+                    Console.WriteLine("Video renderer connected!");
                     OnStatusChanged?.Invoke(this, "connected");
                     return;
                 }
@@ -330,7 +202,7 @@ namespace AirPlay.Services
                     _connected = true;
                     FlushPendingFrames();
                 }
-                Console.WriteLine("Video player connected to FIFO!");
+                Console.WriteLine("Video renderer connected to FIFO!");
                 OnStatusChanged?.Invoke(this, "connected");
             }
             catch (Exception ex)
@@ -349,7 +221,7 @@ namespace AirPlay.Services
         {
             if (_pendingFrames.Count == 0) return;
 
-            Console.WriteLine($"Flushing {_pendingFrames.Count} buffered frames to video player...");
+            Console.WriteLine($"Flushing {_pendingFrames.Count} buffered frames to video renderer...");
             try
             {
                 foreach (var frameData in _pendingFrames)
@@ -383,7 +255,7 @@ namespace AirPlay.Services
 
         /// <summary>
         /// Write H.264 frame data to the pipe.
-        /// Buffers frames before ffplay connects and replays them on connection.
+        /// Buffers frames before the renderer connects and replays them on connection.
         /// </summary>
         public void WriteFrame(H264Data data)
         {
@@ -396,7 +268,7 @@ namespace AirPlay.Services
 
                 if (!_connected)
                 {
-                    // Buffer frames until ffplay connects.
+                    // Buffer frames until the renderer connects.
                     // On a new keyframe, discard older buffered frames (start fresh from latest keyframe).
                     if (isKeyFrame)
                     {
@@ -440,7 +312,7 @@ namespace AirPlay.Services
                 }
                 catch (IOException)
                 {
-                    Console.WriteLine("Video player disconnected");
+                    Console.WriteLine("Video renderer disconnected");
                     _connected = false;
                     OnStatusChanged?.Invoke(this, "disconnected");
                 }

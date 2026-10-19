@@ -24,10 +24,11 @@
                     Foreground="#e8e8e8" BorderThickness="0"/>
         </DockPanel>
 
-        <!-- Video area -->
+        <!-- Video area: frames are decoded in-process and painted here (no external window) -->
         <Border Grid.Row="1" x:Name="VideoArea" Background="#0b0b0d">
             <Grid>
-                <ContentPresenter x:Name="VideoPresenter"/>
+                <Image x:Name="VideoImage" Stretch="Uniform" Visibility="Collapsed"
+                       RenderOptions.BitmapScalingMode="HighQuality"/>
                 <StackPanel x:Name="WaitingOverlay" HorizontalAlignment="Center" VerticalAlignment="Center">
                     <TextBlock Text="● 等待 iPad 连接" FontSize="22" Foreground="#cfd3d8" HorizontalAlignment="Center"/>
                     <TextBlock FontSize="13" Foreground="#9aa0a6" HorizontalAlignment="Center"
