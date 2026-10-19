@@ -5,6 +5,7 @@ using System.IO;
 using System.IO.Pipes;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using AirPlay.Models;
@@ -143,7 +144,7 @@ namespace AirPlay.Services
             //   -framedrop: drop frames if display can't keep up
             //   -avioflags direct: bypass I/O buffering on pipe reads
             //   -vf setpts=0: zero out PTS so frames display immediately without pacing delay
-            var ffplayArgs = $"-f h264 -fflags nobuffer+discardcorrupt -flags low_delay -framedrop -avioflags direct -vf setpts=0 \"{pipePath}\"";
+            var ffplayArgs = $"-f h264 -window_title \"WinAirPlay Mirror\" -fflags nobuffer+discardcorrupt -flags low_delay -framedrop -avioflags direct -vf setpts=0 \"{pipePath}\"";
 
             try
             {
@@ -165,24 +166,33 @@ namespace AirPlay.Services
                     // window ever appears.
                     WorkingDirectory = Path.GetDirectoryName(ffplayPath),
                     UseShellExecute = false,
-                    CreateNoWindow = false
+                    // No console window (it would sit on top of the mirror). ffplay's log output
+                    // is forwarded to our stdout instead, so it still shows in the GUI log panel.
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8
                 };
 
-                _ffplayProcess = Process.Start(psi);
-                if (_ffplayProcess != null)
+                _ffplayProcess = new Process { StartInfo = psi, EnableRaisingEvents = true };
+                _ffplayProcess.OutputDataReceived += (s, e) => { if (e.Data != null) Console.WriteLine("[ffplay] " + e.Data); };
+                _ffplayProcess.ErrorDataReceived += (s, e) => { if (e.Data != null) Console.WriteLine("[ffplay] " + e.Data); };
+                _ffplayProcess.Start();
+                _ffplayProcess.BeginOutputReadLine();
+                _ffplayProcess.BeginErrorReadLine();
+
+                Console.WriteLine($"ffplay launched (PID: {_ffplayProcess.Id})");
+                // Surface an immediate crash instead of silently waiting for a window that never comes.
+                Task.Run(() =>
                 {
-                    Console.WriteLine($"ffplay launched (PID: {_ffplayProcess.Id})");
-                    // Surface an immediate crash instead of silently waiting for a window that never comes.
-                    Task.Run(() =>
+                    try
                     {
-                        try
-                        {
-                            if (_ffplayProcess.WaitForExit(2500))
-                                Console.WriteLine($"ffplay exited early with code {_ffplayProcess.ExitCode} (window never appeared)");
-                        }
-                        catch { }
-                    });
-                }
+                        if (_ffplayProcess.WaitForExit(2500))
+                            Console.WriteLine($"ffplay exited early with code {_ffplayProcess.ExitCode} (window never appeared)");
+                    }
+                    catch { }
+                });
             }
             catch (Exception ex)
             {

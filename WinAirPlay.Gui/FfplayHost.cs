@@ -38,6 +38,11 @@ namespace WinAirPlay.Gui
             // Reparent into the host. Sizing happens in ArrangeOverride (ActualWidth
             // is still 0 here, so we must not MoveWindow to a zero rect yet).
             SetParent(_ffHwnd, hwndParent.Handle);
+
+            // SDL may have created the window hidden while initialising; force it visible
+            // and move it off the "hidden" state once it belongs to our host.
+            try { ShowWindow(_ffHwnd, SW_SHOW); } catch { }
+
             return new HandleRef(this, _ffHwnd);
         }
 
@@ -82,31 +87,44 @@ namespace WinAirPlay.Gui
         }
 
         /// <summary>
-        /// Wait (up to timeoutMs) for ffplay's top-level window to appear for the given PID.
-        /// Uses EnumWindows instead of Process.MainWindowHandle because the latter caches an
-        /// empty handle while ffplay is still initialising.
+        /// Wait (up to timeoutMs) for ffplay's video window.
+        /// Primary strategy: FindWindow by the fixed SDL window class ("SDL_app"). Unlike
+        /// EnumWindows this does NOT require the window to be visible yet, which is exactly
+        /// the case while ffplay is still initialising its renderer.
+        /// Fallback: enumerate top-level windows owned by the ffplay PID.
         /// </summary>
         public static IntPtr FindFfplayWindow(int pid, int timeoutMs)
         {
             int deadline = Environment.TickCount + timeoutMs;
             while (Environment.TickCount < deadline)
             {
+                // 1) SDL video window by class name (most reliable).
+                IntPtr sdl = FindWindow("SDL_app", null);
+                if (sdl != IntPtr.Zero && (pid <= 0 || OwnedByPid(sdl, pid)))
+                    return sdl;
+
+                // 2) Fallback: any top-level window belonging to the ffplay process.
                 IntPtr found = IntPtr.Zero;
                 EnumWindows((hWnd, lParam) =>
                 {
-                    GetWindowThreadProcessId(hWnd, out uint winPid);
-                    if (winPid != (uint)pid) return true;
+                    if (!OwnedByPid(hWnd, pid)) return true;
                     if (!IsWindowVisible(hWnd)) return true;
-                    if (GetWindow(hWnd, GW_OWNER) != IntPtr.Zero) return true; // skip tool windows
+                    if (GetWindow(hWnd, GW_OWNER) != IntPtr.Zero) return true;
                     if (GetWindowTextLength(hWnd) == 0 && GetWindowLong(hWnd, GWL_STYLE) == 0) return true;
                     found = hWnd;
-                    return false; // stop enumerating
+                    return false;
                 }, IntPtr.Zero);
 
                 if (found != IntPtr.Zero) return found;
                 Thread.Sleep(80);
             }
             return IntPtr.Zero;
+        }
+
+        private static bool OwnedByPid(IntPtr hWnd, int pid)
+        {
+            GetWindowThreadProcessId(hWnd, out uint wpid);
+            return wpid == (uint)pid;
         }
 
         private const int GWL_STYLE = -16;
@@ -118,6 +136,14 @@ namespace WinAirPlay.Gui
         private const int WS_MAXIMIZEBOX = 0x00010000;
 
         private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        private const int SW_SHOW = 5;
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
+
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
         [DllImport("user32.dll")]
         private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
