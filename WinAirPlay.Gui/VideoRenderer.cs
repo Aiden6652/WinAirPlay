@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -65,11 +66,19 @@ namespace WinAirPlay.Gui
                 throw new FileNotFoundException("未找到 ffmpeg.exe", _ffmpegPath);
 
             // -f h264 ... : raw Annex-B H.264 from the pipe (same thing ffplay used to read)
+            //   DO NOT set -analyzeduration 0 here: with a *live* pipe there is no file size,
+            //   so ffmpeg must read an actual chunk of the stream to learn the codec parameters
+            //   (resolution / SPS-PPS). analyseduration=0 makes it give up before the first
+            //   keyframe arrives -> it prints "Could not find codec parameters" and exits -> 0 frames.
+            //   A generous probesize + a real (non-zero) analyseduration fixes it.
+            // -bsf:v h264_mp4toannexb : harmless if the stream is already Annex-B, but converts
+            //   AVCC (length-prefixed) payloads to Annex-B start codes, which -f h264 expects.
             // scale+pad     : fit any source into the fixed 1280x720 canvas, letterboxed
             // bgr24 rawvideo: WPF can blit this directly with no pixel conversion
             string args =
                 "-hide_banner -loglevel warning -nostdin " +
-                "-f h264 -probesize 65536 -analyzeduration 0 -fflags nobuffer+discardcorrupt -flags low_delay " +
+                "-f h264 -probesize 500000 -analyzeduration 5000000 -fflags nobuffer+discardcorrupt -flags low_delay " +
+                "-bsf:v h264_mp4toannexb " +
                 $"-i \"{_pipePath}\" " +
                 $"-an -vf \"scale={FrameWidth}:{FrameHeight}:force_original_aspect_ratio=decrease," +
                 $"pad={FrameWidth}:{FrameHeight}:(ow-iw)/2:(oh-ih)/2\" " +
@@ -98,6 +107,8 @@ namespace WinAirPlay.Gui
             };
             _proc.Exited += (_, _) =>
             {
+                if (_proc != null)
+                    Log?.Invoke($"ffmpeg 进程已退出，退出码 {_proc.ExitCode}");
                 if (!_running) return;
                 _running = false;
                 Exited?.Invoke();
@@ -114,6 +125,20 @@ namespace WinAirPlay.Gui
                 Priority = ThreadPriority.AboveNormal
             };
             _reader.Start();
+
+            // Surface a crash immediately instead of silently waiting for a frame that never comes.
+            // Typical cause: ffmpeg.exe missing a sibling DLL (0xc0000135 -> ExitCode -1073741515).
+            Task.Run(() =>
+            {
+                try
+                {
+                    if (_proc != null && _proc.WaitForExit(2500))
+                    {
+                        Log?.Invoke($"ffmpeg 在启动后 {_proc.ExitCode} 退出（缺 DLL 或参数错误？检查引擎目录 ffmpeg 是否完整）");
+                    }
+                }
+                catch { }
+            });
         }
 
         private void ReadLoop()
@@ -166,6 +191,11 @@ namespace WinAirPlay.Gui
         }
 
         public long FramesRendered => _framesRendered;
+
+        /// <summary>True if the ffmpeg process has already terminated (crash vs. silent).</summary>
+        public bool HasExited => _proc != null && _proc.HasExited;
+        /// <summary>ffmpeg exit code, -1 if not started/exited yet.</summary>
+        public int ExitCode => _proc?.ExitCode ?? -1;
 
         public void Dispose()
         {

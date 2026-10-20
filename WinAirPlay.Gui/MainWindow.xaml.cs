@@ -181,15 +181,20 @@ namespace WinAirPlay.Gui
         /// <summary>Warns if ffmpeg stays silent, instead of leaving the user staring at black.</summary>
         private void WatchFirstFrame(VideoRenderer renderer)
         {
-            Task.Delay(6000).ContinueWith(_ =>
+            Task.Delay(12000).ContinueWith(_ =>
             {
                 if (Dispatcher.HasShutdownStarted) return;
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
                     if (!ReferenceEquals(_renderer, renderer)) return;
                     if (renderer.FramesRendered > 0) return;
-                    AppendLog("WARN: 6 秒内没有解出任何画面（ffmpeg 未收到可解码帧）。");
-                    SetStatus(State.Mirroring, "已连接，但未收到可解码的视频帧（请看日志 [ffmpeg] 行）");
+
+                    string detail = renderer.HasExited
+                        ? $"ffmpeg 已退出（退出码 {renderer.ExitCode}）—— 多为 ffmpeg.exe 缺同目录 DLL 或参数错误，请看上面 [ffmpeg] 行"
+                        : "ffmpeg 仍在运行但无帧 —— 管道可能没连上，或 iPad 还没开始发流（先看引擎日志有没有 “Video renderer connected!”）";
+
+                    AppendLog("WARN: 12 秒内没有解出任何画面。" + detail);
+                    SetStatus(State.Mirroring, "已连接，但未收到可解码的视频帧（" + detail + "）");
                 }));
             });
         }
