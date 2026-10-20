@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:WinAirPlay.Gui"
         Title="WinAirPlay · 把 iPad 投到 Windows" Height="640" Width="1000"
+        Icon="pack://application:,,,/Assets/App.ico"
         Background="#16181d" Foreground="#e8e8e8" FontFamily="Segoe UI">
 
     <Grid>
@@ -19,8 +20,11 @@
                        VerticalAlignment="Center" Margin="14,0,0,0"/>
             <TextBlock Text="把 iPad / iPhone 投到 Windows" FontSize="12" Foreground="#9aa0a6"
                        VerticalAlignment="Center" Margin="10,0,0,0"/>
+            <Button x:Name="OpenLogBtn" Content="打开日志" Width="84" Height="30" DockPanel.Dock="Right"
+                    Margin="0,0,8,0" Click="OpenLog_Click" Background="#2a2e36"
+                    Foreground="#e8e8e8" BorderThickness="0"/>
             <Button x:Name="SettingsBtn" Content="⚙ 设置" Width="80" Height="30" DockPanel.Dock="Right"
-                    Margin="0,0,12,0" Click="SettingsBtn_Click" Background="#2a2e36"
+                    Margin="0,0,8,0" Click="SettingsBtn_Click" Background="#2a2e36"
                     Foreground="#e8e8e8" BorderThickness="0"/>
         </DockPanel>
 

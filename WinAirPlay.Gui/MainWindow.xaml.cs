@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
 using System.Windows;
@@ -14,6 +15,10 @@ namespace WinAirPlay.Gui
         private ReceiverSettings _settings = null!;
         private readonly object _engineLock = new object();
         private State _state = State.Initializing;
+
+        // Every log line is mirrored here so the user can open/send it without copy-pasting the UI.
+        private static readonly string LogFilePath =
+            Path.Combine(Path.GetTempPath(), "WinAirPlay", "WinAirPlay.log");
 
         // Must match AirPlay/Services/VideoOutputService.cs
         private const string PipeReadyMarker = "VIDEOPIPE_READY";
@@ -34,6 +39,13 @@ namespace WinAirPlay.Gui
             DeviceNameBox.Text = _settings.Instance;
             PortBox.Text = _settings.AirPlayPort.ToString();
             MacBox.Text = _settings.DeviceMacAddress;
+
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(LogFilePath)!);
+                AppendLog("日志已写入文件（点右上角『打开日志』即可查看或发给开发者）：" + LogFilePath);
+            }
+            catch { }
 
             // Environment diagnostics: the first thing to look at when video never appears.
             AppendLog("引擎目录：" + Settings.EngineDir);
@@ -222,6 +234,8 @@ namespace WinAirPlay.Gui
         {
             LogBox.AppendText(line + Environment.NewLine);
             LogBox.ScrollToEnd();
+            try { File.AppendAllText(LogFilePath, line + Environment.NewLine); }
+            catch { }
         }
 
         private void SettingsBtn_Click(object sender, RoutedEventArgs e)
@@ -237,6 +251,19 @@ namespace WinAirPlay.Gui
 
             StartReceiver(); // restart with new settings
             SettingsPanel.IsExpanded = false;
+        }
+
+        private void OpenLog_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // Open File Explorer with the log file pre-selected.
+                Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{LogFilePath}\"")
+                {
+                    UseShellExecute = true
+                });
+            }
+            catch { }
         }
     }
 }

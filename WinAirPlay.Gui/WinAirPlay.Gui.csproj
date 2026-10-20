@@ -11,11 +11,14 @@
     <RootNamespace>WinAirPlay.Gui</RootNamespace>
     <LangVersion>latest</LangVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\App.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- The AirPlay engine + FFmpeg are zipped and embedded into this single-file EXE at build time. -->
     <EmbeddedResource Include="Resources\engine.zip" Condition="Exists('Resources\engine.zip')" />
+    <!-- App icon: embedded as a Win32 resource (EXE/Taskbar) and as a WPF resource (Window.Icon). -->
+    <Resource Include="Assets\App.ico" />
   </ItemGroup>
 
 </Project>
